@@ -4,7 +4,7 @@
 use crossbeam::atomic::AtomicCell;
 use pc_keyboard::DecodedKey;
 use pluggable_interrupt_os::{vga_buffer::clear_screen, HandlerTable};
-use simple_swim_template::SwimInterface;
+use csci320_project7::SwimInterface;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
