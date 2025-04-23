@@ -10,6 +10,12 @@ edition = "2021"
 bootloader = "0.9.30"
 pc-keyboard = "0.8.0"
 pluggable_interrupt_os = "0.5.3"
+compiler_builtins = { version = "0.1", features = ["mem"] }
+simple_interp = {git = "https://github.com/gjf2a/simple_interp"}
+gc_headers = {git = "https://github.com/gjf2a/gc_headers"}
+ramdisk = {git = "https://github.com/gjf2a/ramdisk"}
+gc_heap_template = {git = "https://github.com/ianwalker04/csci320-project8"}
+file_system_solution = {git = "https://github.com/ianwalker04/csci320-project9"}
 
 [dependencies.num]
 version = "0.4.0"
