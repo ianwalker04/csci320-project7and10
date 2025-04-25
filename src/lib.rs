@@ -35,20 +35,24 @@ const MAX_FILES_STORED: usize = 30;
 const MAX_FILENAME_BYTES: usize = 10;
 
 // Program Execution Constants
-const MAX_TOKENS: usize = 500;
-const MAX_LITERAL_CHARS: usize = 30;
-const STACK_DEPTH: usize = 50;
-const MAX_LOCAL_VARS: usize = 20;
-const HEAP_SIZE: usize = 1024;
+const MAX_TOKENS: usize = 100;
+const MAX_LITERAL_CHARS: usize = 15;
+const STACK_DEPTH: usize = 20;
+const MAX_LOCAL_VARS: usize = 10;
+const HEAP_SIZE: usize = 256;
 const MAX_HEAP_BLOCKS: usize = HEAP_SIZE;
 pub struct SwimDocManager {
     documents: [SwimDocument; 4],
-    active_window: usize
+    active_window: usize,
+    f1_ticks: usize,
+    f2_ticks: usize,
+    f3_ticks: usize,
+    f4_ticks: usize
 }
 
 pub struct SwimDocument {
     letters: [[char; WINDOW_WIDTH]; WINDOW_HEIGHT],
-    interpreters: [Option<Interpreter<MAX_TOKENS, MAX_LITERAL_CHARS, STACK_DEPTH, MAX_LOCAL_VARS, WINDOW_WIDTH, GenerationalHeap<HEAP_SIZE, MAX_HEAP_BLOCKS, 2>>>; 4],
+    interpreter: Option<Interpreter<MAX_TOKENS, MAX_LITERAL_CHARS, STACK_DEPTH, MAX_LOCAL_VARS, WINDOW_WIDTH, GenerationalHeap<HEAP_SIZE, MAX_HEAP_BLOCKS, 2>>>,
     num_letters: usize,
     next_letter: usize,
     start_col: usize,
@@ -58,11 +62,7 @@ pub struct SwimDocument {
     active: bool,
     file_system: FileSystem<MAX_OPEN, BLOCK_SIZE, NUM_BLOCKS, MAX_FILE_BLOCKS, MAX_FILE_BYTES, MAX_FILES_STORED, MAX_FILENAME_BYTES>,
     window_status: WindowStatus,
-    active_file: usize,
-    f1_ticks: usize,
-    f2_ticks: usize,
-    f3_ticks: usize,
-    f4_ticks: usize
+    active_file: usize
 }
 
 #[derive(PartialEq)]
@@ -89,7 +89,11 @@ impl Default for SwimDocManager {
                         SwimDocument::new(WINDOW_2_START_COL, WINDOW_2_START_ROW),
                         SwimDocument::new(WINDOW_3_START_COL, WINDOW_3_START_ROW),
                         SwimDocument::new(WINDOW_4_START_COL, WINDOW_4_START_ROW)],
-            active_window: 0
+            active_window: 0,
+            f1_ticks: 0,
+            f2_ticks: 0,
+            f3_ticks: 0,
+            f4_ticks: 0
         }
     }
 }
@@ -101,8 +105,18 @@ impl SwimDocManager {
             if i != self.active_window {
                 doc.active = false;
             }
+            if doc.interpreter.is_some() {
+                match i {
+                    0 => self.f1_ticks += 1,
+                    1 => self.f2_ticks += 1,
+                    2 => self.f3_ticks += 1,
+                    3 => self.f4_ticks += 1,
+                    _ => {}
+                }
+            }
             doc.tick();
         }
+        self.draw_program_ticks();
     }
 
     pub fn key(&mut self, key: DecodedKey) {
@@ -114,6 +128,17 @@ impl SwimDocManager {
             _ => {}
         }
         self.documents[self.active_window].key(key, self.active_window);
+    }
+
+    fn draw_program_ticks(&self) {
+        plot_str("F1", 71, 0, ColorCode::new(Color::White, Color::Black));
+        plot_num(self.f1_ticks as isize, 71, 1, ColorCode::new(Color::White, Color::Black));
+        plot_str("F2", 71, 2, ColorCode::new(Color::White, Color::Black));
+        plot_num(self.f2_ticks as isize, 71, 3, ColorCode::new(Color::White, Color::Black));
+        plot_str("F3", 71, 4, ColorCode::new(Color::White, Color::Black));
+        plot_num(self.f3_ticks as isize, 71, 5, ColorCode::new(Color::White, Color::Black));
+        plot_str("F4", 71, 6, ColorCode::new(Color::White, Color::Black));
+        plot_num(self.f4_ticks as isize, 71, 7, ColorCode::new(Color::White, Color::Black));
     }
 }
 
@@ -129,7 +154,7 @@ impl SwimDocument {
     fn new(start_col: usize, start_row: usize) -> Self {
         let mut swim_doc: SwimDocument = Self {
             letters: [['\0'; WINDOW_WIDTH]; WINDOW_HEIGHT],
-            interpreters: [None; 4],
+            interpreter: None,
             num_letters: 0,
             next_letter: 0,
             start_col,
@@ -139,11 +164,7 @@ impl SwimDocument {
             active: false,
             file_system: FileSystem::new(RamDisk::new()),
             window_status: WindowStatus::DisplayingFiles,
-            active_file: 0,
-            f1_ticks: 0,
-            f2_ticks: 0,
-            f3_ticks: 0,
-            f4_ticks: 0
+            active_file: 0
         };
         swim_doc.create_default_files();
         swim_doc
@@ -210,17 +231,6 @@ print((4 * sum))"#.as_bytes()).unwrap();
         }
     }
 
-    fn run_program(&mut self, active_window: usize) {
-        let files: (usize, [[u8; 10]; 30]) = self.file_system.list_directory().unwrap();
-        let file_name: &str = str::from_utf8(&files.1[self.active_file]).unwrap();
-        let mut interpreter: Interpreter<MAX_TOKENS, MAX_LITERAL_CHARS, STACK_DEPTH, MAX_LOCAL_VARS, WINDOW_WIDTH, GenerationalHeap<HEAP_SIZE, MAX_HEAP_BLOCKS, 2>> = Interpreter::new(file_name);
-        match interpreter.tick(self) {
-            simple_interp::TickStatus::Continuing => {},
-            simple_interp::TickStatus::Finished => {},
-            simple_interp::TickStatus::AwaitInput => {}
-        }
-    }
-
     fn letter_columns(&self) -> impl Iterator<Item = usize> + '_ {
         0..self.num_letters
     }
@@ -228,9 +238,24 @@ print((4 * sum))"#.as_bytes()).unwrap();
     fn tick(&mut self) {
         self.clear_current();
         self.draw_outline(self.active);
-        self.draw_program_ticks();
         if self.window_status == WindowStatus::DisplayingFiles {
             self.display_files();
+        } else if self.window_status == WindowStatus::ExecutingFile {
+            match self.interpreter {
+                Some(mut interpreter) => {
+                    match interpreter.tick(self) {
+                        simple_interp::TickStatus::Continuing => {},
+                        simple_interp::TickStatus::Finished => {
+                            plot_str("Hello", 8, 8, ColorCode::new(Color::White, Color::Black));
+                            self.interpreter = None;
+                        },
+                        simple_interp::TickStatus::AwaitInput => {
+                            plot_str("Awaiting input", 8, 8, ColorCode::new(Color::White, Color::Black));
+                        }
+                    }
+                },
+                None => {}
+            }
         }
     }
 
@@ -280,17 +305,6 @@ print((4 * sum))"#.as_bytes()).unwrap();
         plot_str("F4", 52, 13, ColorCode::new(Color::White, Color::Black));
     }
 
-    fn draw_program_ticks(&self) {
-        plot_str("F1", 71, 0, ColorCode::new(Color::White, Color::Black));
-        plot_num(self.f1_ticks as isize, 71, 1, ColorCode::new(Color::White, Color::Black));
-        plot_str("F2", 71, 2, ColorCode::new(Color::White, Color::Black));
-        plot_num(self.f2_ticks as isize, 71, 3, ColorCode::new(Color::White, Color::Black));
-        plot_str("F3", 71, 4, ColorCode::new(Color::White, Color::Black));
-        plot_num(self.f3_ticks as isize, 71, 5, ColorCode::new(Color::White, Color::Black));
-        plot_str("F4", 71, 6, ColorCode::new(Color::White, Color::Black));
-        plot_num(self.f4_ticks as isize, 71, 7, ColorCode::new(Color::White, Color::Black));
-    }
-
     fn get_actual_row(&self) -> usize {
         self.start_row + (self.current_row % WINDOW_HEIGHT)
     }
@@ -337,8 +351,10 @@ print((4 * sum))"#.as_bytes()).unwrap();
                     if self.window_status != WindowStatus::DisplayingFiles {
                         return;
                     }
+                    let files: (usize, [[u8; 10]; 30]) = self.file_system.list_directory().unwrap();
+                    let file_name: &str = str::from_utf8(&files.1[self.active_file]).unwrap();
+                    self.interpreter = Some(Interpreter::new(file_name));
                     self.window_status = WindowStatus::ExecutingFile;
-                    self.run_program(active_window);
                 } else {
                     self.handle_unicode(char);
                 }
