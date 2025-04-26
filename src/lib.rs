@@ -9,6 +9,7 @@ use pluggable_interrupt_os::vga_buffer::{
     is_drawable, plot, Color, ColorCode, plot_str, plot_num, BUFFER_WIDTH
 };
 use core::cmp::min;
+use core::str;
 use simple_interp::{Interpreter, InterpreterOutput, ArrayString};
 
 // Window Constants
@@ -132,11 +133,16 @@ impl SwimDocManager {
                     if active_doc.window_status != WindowStatus::DisplayingFiles {
                         return;
                     }
-                    let files: (usize, [[u8; 10]; 30]) = active_doc.file_system.list_directory().unwrap();
-                    let file_name: &str = str::from_utf8(&files.1[active_doc.active_file]).unwrap();
-                    // plot_str(file_name, 9, 9, ColorCode::new(Color::White, Color::Black));
-                    let fd: usize = active_doc.file_system.open_read(file_name).unwrap();
-                    let mut buffer: [u8; 0] = [];
+                    let files: [[u8; 10]; 30] = active_doc.file_system.list_directory().unwrap().1;
+                    let file_name: &str = str::from_utf8(&files[active_doc.active_file]).unwrap().trim_matches(char::from(0));
+                    // panic!("{file_name}");
+                    let fd: usize;
+                    match active_doc.file_system.open_read(file_name.trim()) {
+                        Ok(value) => fd = value,
+                        Err(e) => panic!("Error: {e}, {}", file_name)
+                    }
+                    // let fd: usize = active_doc.file_system.open_read(file_name).unwrap();
+                    let mut buffer: [u8; MAX_FILE_BYTES] = [0; MAX_FILE_BYTES];
                     active_doc.file_system.read(fd, &mut buffer).unwrap();
                     let file: &str = str::from_utf8(&buffer).unwrap();
                     self.interpreters[self.active_window] = Some(Interpreter::new(file));
@@ -233,7 +239,7 @@ print((4 * sum))"#.as_bytes()).unwrap();
         let mut col: usize = self.start_col;
         let mut row: usize = self.start_row - 1;
         for file_num in 0..files.0 {
-            let text: &str = str::from_utf8(&files.1[file_num]).unwrap();
+            let text: &str = str::from_utf8(&files.1[file_num]).unwrap().trim_matches(char::from(0));
             if file_num % 3 == 0 {
                 col = self.start_col;
                 row += 1;
