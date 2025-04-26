@@ -43,6 +43,7 @@ const HEAP_SIZE: usize = 256;
 const MAX_HEAP_BLOCKS: usize = HEAP_SIZE;
 pub struct SwimDocManager {
     documents: [SwimDocument; 4],
+    interpreters: [Option<Interpreter<MAX_TOKENS, MAX_LITERAL_CHARS, STACK_DEPTH, MAX_LOCAL_VARS, WINDOW_WIDTH, GenerationalHeap<HEAP_SIZE, MAX_HEAP_BLOCKS, 2>>>; 4],
     active_window: usize,
     f1_ticks: usize,
     f2_ticks: usize,
@@ -52,7 +53,6 @@ pub struct SwimDocManager {
 
 pub struct SwimDocument {
     letters: [[char; WINDOW_WIDTH]; WINDOW_HEIGHT],
-    interpreter: Option<Interpreter<MAX_TOKENS, MAX_LITERAL_CHARS, STACK_DEPTH, MAX_LOCAL_VARS, WINDOW_WIDTH, GenerationalHeap<HEAP_SIZE, MAX_HEAP_BLOCKS, 2>>>,
     num_letters: usize,
     next_letter: usize,
     start_col: usize,
@@ -89,6 +89,7 @@ impl Default for SwimDocManager {
                         SwimDocument::new(WINDOW_2_START_COL, WINDOW_2_START_ROW),
                         SwimDocument::new(WINDOW_3_START_COL, WINDOW_3_START_ROW),
                         SwimDocument::new(WINDOW_4_START_COL, WINDOW_4_START_ROW)],
+            interpreters: [None; 4],
             active_window: 0,
             f1_ticks: 0,
             f2_ticks: 0,
@@ -105,7 +106,7 @@ impl SwimDocManager {
             if i != self.active_window {
                 doc.active = false;
             }
-            if doc.interpreter.is_some() {
+            if self.interpreters[self.active_window].is_some() {
                 match i {
                     0 => self.f1_ticks += 1,
                     1 => self.f2_ticks += 1,
@@ -114,7 +115,7 @@ impl SwimDocManager {
                     _ => {}
                 }
             }
-            doc.tick();
+            doc.tick(&mut self.interpreters[self.active_window]);
         }
         self.draw_program_ticks();
     }
@@ -125,9 +126,26 @@ impl SwimDocManager {
             DecodedKey::RawKey(KeyCode::F2) => self.active_window = 1,
             DecodedKey::RawKey(KeyCode::F3) => self.active_window = 2,
             DecodedKey::RawKey(KeyCode::F4) => self.active_window = 3,
+            DecodedKey::Unicode(char) => {
+                if char == 'r' {
+                    let active_doc: &mut SwimDocument = &mut self.documents[self.active_window];
+                    if active_doc.window_status != WindowStatus::DisplayingFiles {
+                        return;
+                    }
+                    let files: (usize, [[u8; 10]; 30]) = active_doc.file_system.list_directory().unwrap();
+                    let file_name: &str = str::from_utf8(&files.1[active_doc.active_file]).unwrap();
+                    // plot_str(file_name, 9, 9, ColorCode::new(Color::White, Color::Black));
+                    let fd: usize = active_doc.file_system.open_read(file_name).unwrap();
+                    let mut buffer: [u8; 0] = [];
+                    active_doc.file_system.read(fd, &mut buffer).unwrap();
+                    let file: &str = str::from_utf8(&buffer).unwrap();
+                    self.interpreters[self.active_window] = Some(Interpreter::new(file));
+                    active_doc.window_status = WindowStatus::ExecutingFile;
+                }
+            }
             _ => {}
         }
-        self.documents[self.active_window].key(key, self.active_window);
+        self.documents[self.active_window].key(key);
     }
 
     fn draw_program_ticks(&self) {
@@ -145,7 +163,7 @@ impl SwimDocManager {
 impl InterpreterOutput for SwimDocument {
     fn print(&mut self, chars: &[u8]) {
         let output: &str = str::from_utf8(chars).unwrap();
-        panic!("output: {output}");
+        // panic!("output: {output}");
         plot_str(output, 8, 8, ColorCode::new(Color::White, Color::Black));
     }
 }
@@ -154,7 +172,6 @@ impl SwimDocument {
     fn new(start_col: usize, start_row: usize) -> Self {
         let mut swim_doc: SwimDocument = Self {
             letters: [['\0'; WINDOW_WIDTH]; WINDOW_HEIGHT],
-            interpreter: None,
             num_letters: 0,
             next_letter: 0,
             start_col,
@@ -235,19 +252,19 @@ print((4 * sum))"#.as_bytes()).unwrap();
         0..self.num_letters
     }
 
-    fn tick(&mut self) {
+    fn tick(&mut self, interpreter: &mut Option<Interpreter<MAX_TOKENS, MAX_LITERAL_CHARS, STACK_DEPTH, MAX_LOCAL_VARS, WINDOW_WIDTH, GenerationalHeap<HEAP_SIZE, MAX_HEAP_BLOCKS, 2>>>) {
         self.clear_current();
         self.draw_outline(self.active);
         if self.window_status == WindowStatus::DisplayingFiles {
             self.display_files();
         } else if self.window_status == WindowStatus::ExecutingFile {
-            match self.interpreter {
+            match interpreter {
                 Some(mut interpreter) => {
                     match interpreter.tick(self) {
                         simple_interp::TickStatus::Continuing => {},
                         simple_interp::TickStatus::Finished => {
                             plot_str("Hello", 8, 8, ColorCode::new(Color::White, Color::Black));
-                            self.interpreter = None;
+                            // interpreter = None;
                         },
                         simple_interp::TickStatus::AwaitInput => {
                             plot_str("Awaiting input", 8, 8, ColorCode::new(Color::White, Color::Black));
@@ -318,7 +335,7 @@ print((4 * sum))"#.as_bytes()).unwrap();
         self.next_letter = 0;
     }
 
-    fn key(&mut self, key: DecodedKey, active_window: usize) {
+    fn key(&mut self, key: DecodedKey) {
         match key {
             DecodedKey::RawKey(KeyCode::ArrowLeft) => {
                 if !self.active {
@@ -343,22 +360,7 @@ print((4 * sum))"#.as_bytes()).unwrap();
                     self.active_file += 1;
                 }
             },
-            DecodedKey::Unicode(char) => {
-                if char == 'r' {
-                    if !self.active {
-                        return;
-                    }
-                    if self.window_status != WindowStatus::DisplayingFiles {
-                        return;
-                    }
-                    let files: (usize, [[u8; 10]; 30]) = self.file_system.list_directory().unwrap();
-                    let file_name: &str = str::from_utf8(&files.1[self.active_file]).unwrap();
-                    self.interpreter = Some(Interpreter::new(file_name));
-                    self.window_status = WindowStatus::ExecutingFile;
-                } else {
-                    self.handle_unicode(char);
-                }
-            },
+            DecodedKey::Unicode(char) => self.handle_unicode(char),
             DecodedKey::RawKey(_) => {},
         }
     }
