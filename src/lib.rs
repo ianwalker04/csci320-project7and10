@@ -128,6 +128,11 @@ impl SwimDocManager {
             DecodedKey::RawKey(KeyCode::F2) => self.active_window = 1,
             DecodedKey::RawKey(KeyCode::F3) => self.active_window = 2,
             DecodedKey::RawKey(KeyCode::F4) => self.active_window = 3,
+            DecodedKey::RawKey(KeyCode::F6) => {
+                let active_doc: &mut SwimDocument = &mut self.documents[self.active_window];
+                active_doc.clear_window();
+                active_doc.window_status = WindowStatus::DisplayingFiles;
+            },
             DecodedKey::Unicode(char) => {
                 if char == 'r' {
                     let active_doc: &mut SwimDocument = &mut self.documents[self.active_window];
@@ -145,10 +150,11 @@ impl SwimDocManager {
                     let mut buffer: [u8; MAX_FILE_BYTES] = [0; MAX_FILE_BYTES];
                     active_doc.file_system.read(fd, &mut buffer).unwrap();
                     let file: &str = str::from_utf8(&buffer).unwrap().trim_matches(char::from(0));
-                    self.interpreters[self.active_window] = Some(Interpreter::new(file));
+                    active_doc.file_system.close(fd).unwrap();
                     active_doc.window_status = WindowStatus::ExecutingFile;
-                    active_doc.clear_window();
                     active_doc.program_running = true;
+                    active_doc.clear_window();
+                    self.interpreters[self.active_window] = Some(Interpreter::new(file));
                 }
             }
             _ => {}
@@ -263,7 +269,7 @@ print((4 * sum))"#.as_bytes()).unwrap();
     }
 
     fn tick(&mut self, interpreter: &mut Option<Interpreter<MAX_TOKENS, MAX_LITERAL_CHARS, STACK_DEPTH, MAX_LOCAL_VARS, WINDOW_WIDTH, GenerationalHeap<HEAP_SIZE, MAX_HEAP_BLOCKS, 2>>>) {
-        self.draw_outline(self.active);
+        self.draw_outline();
         if self.window_status == WindowStatus::DisplayingFiles {
             self.display_files();
         }
@@ -271,11 +277,13 @@ print((4 * sum))"#.as_bytes()).unwrap();
             match interpreter {
                 Some(mut ip) => {
                     match ip.tick(self) {
-                        simple_interp::TickStatus::Continuing => {},
+                        simple_interp::TickStatus::Continuing => {
+                            // panic!("Continuing");
+                        },
                         simple_interp::TickStatus::Finished => {
-                            *interpreter = None;
+                            panic!("Output should be displayed");
                             self.window_status = WindowStatus::DisplayingOutput;
-                            // panic!("Output should be displayed");
+                            *interpreter = None;
                         },
                         simple_interp::TickStatus::AwaitInput => {
                             self.window_status = WindowStatus::AwaitingInput;
@@ -321,9 +329,9 @@ print((4 * sum))"#.as_bytes()).unwrap();
         }
     }
 
-    fn draw_outline(&self, active: bool) {
+    fn draw_outline(&self) {
         let color: ColorCode;
-        if active {
+        if self.active {
             color = ColorCode::new(Color::Black, Color::White);
         } else {
             color = ColorCode::new(Color::White, Color::Black);
