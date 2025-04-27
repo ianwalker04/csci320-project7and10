@@ -63,7 +63,8 @@ pub struct SwimDocument {
     active: bool,
     file_system: FileSystem<MAX_OPEN, BLOCK_SIZE, NUM_BLOCKS, MAX_FILE_BLOCKS, MAX_FILE_BYTES, MAX_FILES_STORED, MAX_FILENAME_BYTES>,
     window_status: WindowStatus,
-    active_file: usize
+    active_file: usize,
+    program_running: bool
 }
 
 #[derive(PartialEq)]
@@ -107,7 +108,7 @@ impl SwimDocManager {
             if i != self.active_window {
                 doc.active = false;
             }
-            if self.interpreters[self.active_window].is_some() {
+            if doc.program_running && doc.window_status != WindowStatus::AwaitingInput {
                 match i {
                     0 => self.f1_ticks += 1,
                     1 => self.f2_ticks += 1,
@@ -116,7 +117,7 @@ impl SwimDocManager {
                     _ => {}
                 }
             }
-            doc.tick(&mut self.interpreters[self.active_window]);
+            doc.tick(&mut self.interpreters[i]);
         }
         self.draw_program_ticks();
     }
@@ -135,18 +136,13 @@ impl SwimDocManager {
                     }
                     let files: [[u8; 10]; 30] = active_doc.file_system.list_directory().unwrap().1;
                     let file_name: &str = str::from_utf8(&files[active_doc.active_file]).unwrap().trim_matches(char::from(0));
-                    // panic!("{file_name}");
-                    let fd: usize;
-                    match active_doc.file_system.open_read(file_name.trim()) {
-                        Ok(value) => fd = value,
-                        Err(e) => panic!("Error: {e}, {}", file_name)
-                    }
-                    // let fd: usize = active_doc.file_system.open_read(file_name).unwrap();
+                    let fd: usize = active_doc.file_system.open_read(file_name.trim()).unwrap();
                     let mut buffer: [u8; MAX_FILE_BYTES] = [0; MAX_FILE_BYTES];
                     active_doc.file_system.read(fd, &mut buffer).unwrap();
-                    let file: &str = str::from_utf8(&buffer).unwrap();
+                    let file: &str = str::from_utf8(&buffer).unwrap().trim_matches(char::from(0));
                     self.interpreters[self.active_window] = Some(Interpreter::new(file));
                     active_doc.window_status = WindowStatus::ExecutingFile;
+                    active_doc.program_running = true;
                 }
             }
             _ => {}
@@ -168,8 +164,9 @@ impl SwimDocManager {
 
 impl InterpreterOutput for SwimDocument {
     fn print(&mut self, chars: &[u8]) {
-        let output: &str = str::from_utf8(chars).unwrap();
-        // panic!("output: {output}");
+        self.program_running = false;
+        let output: &str = str::from_utf8(chars).unwrap().trim();
+        panic!("{output}");
         plot_str(output, 8, 8, ColorCode::new(Color::White, Color::Black));
     }
 }
@@ -187,7 +184,8 @@ impl SwimDocument {
             active: false,
             file_system: FileSystem::new(RamDisk::new()),
             window_status: WindowStatus::DisplayingFiles,
-            active_file: 0
+            active_file: 0,
+            program_running: false
         };
         swim_doc.create_default_files();
         swim_doc
@@ -263,17 +261,19 @@ print((4 * sum))"#.as_bytes()).unwrap();
         self.draw_outline(self.active);
         if self.window_status == WindowStatus::DisplayingFiles {
             self.display_files();
-        } else if self.window_status == WindowStatus::ExecutingFile {
+        }
+        if self.window_status == WindowStatus::ExecutingFile {
             match interpreter {
-                Some(mut interpreter) => {
-                    match interpreter.tick(self) {
+                Some(mut ip) => {
+                    match ip.tick(self) {
                         simple_interp::TickStatus::Continuing => {},
                         simple_interp::TickStatus::Finished => {
-                            plot_str("Hello", 8, 8, ColorCode::new(Color::White, Color::Black));
-                            // interpreter = None;
+                            *interpreter = None;
+                            self.window_status = WindowStatus::DisplayingOutput;
                         },
                         simple_interp::TickStatus::AwaitInput => {
-                            plot_str("Awaiting input", 8, 8, ColorCode::new(Color::White, Color::Black));
+                            self.window_status = WindowStatus::AwaitingInput;
+                            plot_str("Awaiting input", 10, 10, ColorCode::new(Color::White, Color::Black));
                         }
                     }
                 },
