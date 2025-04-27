@@ -134,6 +134,11 @@ impl SwimDocManager {
                     if active_doc.window_status != WindowStatus::DisplayingFiles {
                         return;
                     }
+                    if active_doc.window_status == WindowStatus::DisplayingOutput {
+                        active_doc.clear_window();
+                        active_doc.window_status = WindowStatus::DisplayingFiles;
+                        return;
+                    }
                     let files: [[u8; 10]; 30] = active_doc.file_system.list_directory().unwrap().1;
                     let file_name: &str = str::from_utf8(&files[active_doc.active_file]).unwrap().trim_matches(char::from(0));
                     let fd: usize = active_doc.file_system.open_read(file_name.trim()).unwrap();
@@ -142,6 +147,7 @@ impl SwimDocManager {
                     let file: &str = str::from_utf8(&buffer).unwrap().trim_matches(char::from(0));
                     self.interpreters[self.active_window] = Some(Interpreter::new(file));
                     active_doc.window_status = WindowStatus::ExecutingFile;
+                    active_doc.clear_window();
                     active_doc.program_running = true;
                 }
             }
@@ -166,8 +172,8 @@ impl InterpreterOutput for SwimDocument {
     fn print(&mut self, chars: &[u8]) {
         self.program_running = false;
         let output: &str = str::from_utf8(chars).unwrap().trim();
-        panic!("{output}");
-        plot_str(output, 8, 8, ColorCode::new(Color::White, Color::Black));
+        // panic!("{output}");
+        plot_str(output, self.start_col, self.start_row, ColorCode::new(Color::White, Color::Black));
     }
 }
 
@@ -257,7 +263,6 @@ print((4 * sum))"#.as_bytes()).unwrap();
     }
 
     fn tick(&mut self, interpreter: &mut Option<Interpreter<MAX_TOKENS, MAX_LITERAL_CHARS, STACK_DEPTH, MAX_LOCAL_VARS, WINDOW_WIDTH, GenerationalHeap<HEAP_SIZE, MAX_HEAP_BLOCKS, 2>>>) {
-        self.clear_current();
         self.draw_outline(self.active);
         if self.window_status == WindowStatus::DisplayingFiles {
             self.display_files();
@@ -270,6 +275,7 @@ print((4 * sum))"#.as_bytes()).unwrap();
                         simple_interp::TickStatus::Finished => {
                             *interpreter = None;
                             self.window_status = WindowStatus::DisplayingOutput;
+                            // panic!("Output should be displayed");
                         },
                         simple_interp::TickStatus::AwaitInput => {
                             self.window_status = WindowStatus::AwaitingInput;
@@ -278,6 +284,14 @@ print((4 * sum))"#.as_bytes()).unwrap();
                     }
                 },
                 None => {}
+            }
+        }
+    }
+
+    fn clear_window(&self) {
+        for row in self.start_row..self.start_row + WINDOW_HEIGHT {
+            for col in self.start_col..self.start_col + WINDOW_WIDTH {
+                plot(' ', col, row, ColorCode::new(Color::Black, Color::Black));
             }
         }
     }
