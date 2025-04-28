@@ -42,6 +42,7 @@ const STACK_DEPTH: usize = 20;
 const MAX_LOCAL_VARS: usize = 10;
 const HEAP_SIZE: usize = 256;
 const MAX_HEAP_BLOCKS: usize = HEAP_SIZE;
+
 pub struct SwimDocManager {
     documents: [SwimDocument; 4],
     interpreters: [Option<Interpreter<MAX_TOKENS, MAX_LITERAL_CHARS, STACK_DEPTH, MAX_LOCAL_VARS, WINDOW_WIDTH, GenerationalHeap<HEAP_SIZE, MAX_HEAP_BLOCKS, 2>>>; 4],
@@ -49,7 +50,8 @@ pub struct SwimDocManager {
     f1_ticks: usize,
     f2_ticks: usize,
     f3_ticks: usize,
-    f4_ticks: usize
+    f4_ticks: usize,
+    next_tick: usize
 }
 
 pub struct SwimDocument {
@@ -64,7 +66,9 @@ pub struct SwimDocument {
     file_system: FileSystem<MAX_OPEN, BLOCK_SIZE, NUM_BLOCKS, MAX_FILE_BLOCKS, MAX_FILE_BYTES, MAX_FILES_STORED, MAX_FILENAME_BYTES>,
     window_status: WindowStatus,
     active_file: usize,
-    program_running: bool
+    program_running: bool,
+    output_line: usize,
+    array_string: ArrayString<WINDOW_WIDTH>
 }
 
 #[derive(PartialEq)]
@@ -96,28 +100,47 @@ impl Default for SwimDocManager {
             f1_ticks: 0,
             f2_ticks: 0,
             f3_ticks: 0,
-            f4_ticks: 0
+            f4_ticks: 0,
+            next_tick: 0
         }
     }
 }
 
 impl SwimDocManager {
     pub fn update(&mut self) {
-        self.documents[self.active_window].active = true;
-        for (i, doc) in self.documents.iter_mut().enumerate() {
-            if i != self.active_window {
-                doc.active = false;
+        for i in 0..self.documents.len() {
+            self.documents[i].active = i == self.active_window;
+            self.documents[i].draw_outline();
+            if self.documents[i].window_status == WindowStatus::DisplayingFiles {
+                self.documents[i].display_files();
             }
-            if doc.program_running && doc.window_status != WindowStatus::AwaitingInput {
-                match i {
-                    0 => self.f1_ticks += 1,
-                    1 => self.f2_ticks += 1,
-                    2 => self.f3_ticks += 1,
-                    3 => self.f4_ticks += 1,
-                    _ => {}
+            if self.documents[i].window_status == WindowStatus::AwaitingInput {
+                self.documents[i].clear_line(self.documents[i].start_row + 1);
+                self.documents[i].draw_current(1);
+            }
+        }
+        let mut running_programs: [usize; 4] = [0; 4];
+        let mut count: usize = 0;
+        for i in 0..self.documents.len() {
+            if self.documents[i].program_running &&
+               self.documents[i].window_status != WindowStatus::AwaitingInput {
+                if count < running_programs.len() {
+                    running_programs[count] = i;
+                    count += 1;
                 }
             }
-            doc.tick(&mut self.interpreters[i]);
+        }
+        if count > 0 {
+            let doc_to_tick: usize = running_programs[self.next_tick % count];
+            match doc_to_tick {
+                0 => self.f1_ticks += 1,
+                1 => self.f2_ticks += 1,
+                2 => self.f3_ticks += 1,
+                3 => self.f4_ticks += 1,
+                _ => {}
+            }
+            self.documents[doc_to_tick].tick(&mut self.interpreters[doc_to_tick]);
+            self.next_tick = (self.next_tick + 1) % count;
         }
         self.draw_program_ticks();
     }
@@ -131,6 +154,7 @@ impl SwimDocManager {
             DecodedKey::RawKey(KeyCode::F6) => {
                 let active_doc: &mut SwimDocument = &mut self.documents[self.active_window];
                 active_doc.clear_window();
+                active_doc.program_running = false;
                 active_doc.window_status = WindowStatus::DisplayingFiles;
             },
             DecodedKey::Unicode(char) => {
@@ -141,6 +165,7 @@ impl SwimDocManager {
                     }
                     if active_doc.window_status == WindowStatus::DisplayingOutput {
                         active_doc.clear_window();
+                        active_doc.program_running = false;
                         active_doc.window_status = WindowStatus::DisplayingFiles;
                         return;
                     }
@@ -152,8 +177,13 @@ impl SwimDocManager {
                     let file: &str = str::from_utf8(&buffer).unwrap().trim_matches(char::from(0));
                     active_doc.file_system.close(fd).unwrap();
                     active_doc.window_status = WindowStatus::ExecutingFile;
-                    active_doc.program_running = true;
                     active_doc.clear_window();
+                    active_doc.output_line = 0;
+                    active_doc.current_row = 0;
+                    active_doc.cursor_position = 0;
+                    active_doc.num_letters = 0;
+                    active_doc.next_letter = 0;
+                    active_doc.program_running = true;
                     self.interpreters[self.active_window] = Some(Interpreter::new(file));
                 }
             }
@@ -176,10 +206,10 @@ impl SwimDocManager {
 
 impl InterpreterOutput for SwimDocument {
     fn print(&mut self, chars: &[u8]) {
-        self.program_running = false;
         let output: &str = str::from_utf8(chars).unwrap().trim();
-        // panic!("{output}");
-        plot_str(output, self.start_col, self.start_row, ColorCode::new(Color::White, Color::Black));
+        self.clear_line(self.output_line);
+        plot_str(output, self.start_col, self.start_row + self.output_line, ColorCode::new(Color::White, Color::Black));
+        self.output_line = (self.output_line + 1) % WINDOW_HEIGHT;
     }
 }
 
@@ -197,7 +227,9 @@ impl SwimDocument {
             file_system: FileSystem::new(RamDisk::new()),
             window_status: WindowStatus::DisplayingFiles,
             active_file: 0,
-            program_running: false
+            program_running: false,
+            output_line: 0,
+            array_string: ArrayString::default()
         };
         swim_doc.create_default_files();
         swim_doc
@@ -269,30 +301,40 @@ print((4 * sum))"#.as_bytes()).unwrap();
     }
 
     fn tick(&mut self, interpreter: &mut Option<Interpreter<MAX_TOKENS, MAX_LITERAL_CHARS, STACK_DEPTH, MAX_LOCAL_VARS, WINDOW_WIDTH, GenerationalHeap<HEAP_SIZE, MAX_HEAP_BLOCKS, 2>>>) {
-        self.draw_outline();
-        if self.window_status == WindowStatus::DisplayingFiles {
-            self.display_files();
-        }
         if self.window_status == WindowStatus::ExecutingFile {
             match interpreter {
-                Some(mut ip) => {
+                Some(ref mut ip) => {
+                    if let Ok(input_str) = self.array_string.as_str() {
+                        if !input_str.is_empty() {
+                            ip.provide_input(input_str).unwrap();
+                            self.array_string.clear();
+                            self.clear_line(self.start_row);
+                        }
+                    }
                     match ip.tick(self) {
-                        simple_interp::TickStatus::Continuing => {
-                            // panic!("Continuing");
-                        },
+                        simple_interp::TickStatus::Continuing => {},
                         simple_interp::TickStatus::Finished => {
-                            panic!("Output should be displayed");
                             self.window_status = WindowStatus::DisplayingOutput;
+                            self.program_running = false;
                             *interpreter = None;
                         },
                         simple_interp::TickStatus::AwaitInput => {
                             self.window_status = WindowStatus::AwaitingInput;
-                            plot_str("Awaiting input", 10, 10, ColorCode::new(Color::White, Color::Black));
+                            self.clear_line(self.start_row + 1);
+                            self.current_row = 0;
+                            self.cursor_position = 0;
+                            self.num_letters = 0;
+                            self.next_letter = 0;
                         }
                     }
                 },
                 None => {}
             }
+        }
+        if self.window_status == WindowStatus::AwaitingInput {
+            self.clear_current(1);
+            self.draw_current(1);
+            self.output_line = 0;
         }
     }
 
@@ -304,8 +346,8 @@ print((4 * sum))"#.as_bytes()).unwrap();
         }
     }
 
-    fn clear_current(&self) {
-        let row: usize = self.get_actual_row();
+    fn clear_current(&self, offset: usize) {
+        let row: usize = self.get_actual_row() + offset;
         for col in self.letter_columns() {
             let actual_col: usize = self.start_col + col;
             plot(' ', actual_col, row, ColorCode::new(Color::Black, Color::Black));
@@ -313,20 +355,24 @@ print((4 * sum))"#.as_bytes()).unwrap();
         plot(' ', self.start_col + self.cursor_position, row, ColorCode::new(Color::Black, Color::Black));
     }
 
-    fn draw_current(&mut self) {
-        if self.window_status == WindowStatus::EditingFile {
-            let row: usize = self.get_actual_row();
-            for (i, _) in self.letter_columns().enumerate() {
-                let actual_col: usize = self.start_col + i;
-                plot(
-                    self.letters[self.current_row][i],
-                    actual_col,
-                    row,
-                    ColorCode::new(Color::White, Color::Black),
-                );
-            }
-            plot(' ', self.start_col + self.cursor_position, row, ColorCode::new(Color::White, Color::White));
+    fn clear_line(&self, row: usize) {
+        for col in self.start_col..self.start_col + WINDOW_WIDTH {
+            plot(' ', col, row, ColorCode::new(Color::Black, Color::Black));
         }
+    }
+
+    fn draw_current(&mut self, offset: usize) {
+        let row: usize = self.get_actual_row() + offset;
+        for (i, _) in self.letter_columns().enumerate() {
+            let actual_col: usize = self.start_col + i;
+            plot(
+                self.letters[self.current_row][i],
+                actual_col,
+                row,
+                ColorCode::new(Color::White, Color::Black),
+            );
+        }
+        plot(' ', self.start_col + self.cursor_position, row, ColorCode::new(Color::White, Color::White));
     }
 
     fn draw_outline(&self) {
@@ -354,10 +400,10 @@ print((4 * sum))"#.as_bytes()).unwrap();
         self.start_row + (self.current_row % WINDOW_HEIGHT)
     }
 
-    fn start_new_line(&mut self) {
-        let row: usize = self.get_actual_row();
+    fn start_new_line(&mut self, offset: usize) {
+        let row: usize = self.get_actual_row() + offset;
         plot(' ', self.start_col + self.cursor_position, row, ColorCode::new(Color::Black, Color::Black));
-        self.current_row = (self.current_row + 1) % WINDOW_HEIGHT;
+        self.current_row = (self.current_row + 1) % (WINDOW_HEIGHT - offset);
         self.cursor_position = 0;
         self.num_letters = 0;
         self.next_letter = 0;
@@ -388,27 +434,50 @@ print((4 * sum))"#.as_bytes()).unwrap();
                     self.active_file += 1;
                 }
             },
-            DecodedKey::Unicode(char) => self.handle_unicode(char),
+            DecodedKey::Unicode(char) => {
+                if self.window_status == WindowStatus::AwaitingInput ||
+                   self.window_status == WindowStatus::EditingFile {
+                    self.handle_unicode(char);
+                }
+            },
             DecodedKey::RawKey(_) => {},
         }
     }
 
     fn handle_unicode(&mut self, key: char) {
-        if self.window_status == WindowStatus::EditingFile {
-            if key == '\n' {
-                self.start_new_line();
-            } else if is_drawable(key) {
-                if self.cursor_position >= WINDOW_WIDTH - 1 {
-                    let current_char: char = key;
-                    self.start_new_line();
-                    self.letters[self.current_row][self.next_letter] = current_char;
-                } else {
-                    self.letters[self.current_row][self.next_letter] = key;
+        if key == '\n' {
+            if self.window_status == WindowStatus::AwaitingInput {
+                let mut input_string: ArrayString<33> = ArrayString::default();
+                for i in 0..self.num_letters {
+                    input_string.push_char(self.letters[self.current_row][i]);
                 }
-                self.next_letter = add1::<WINDOW_WIDTH>(self.next_letter);
-                self.num_letters = min(self.num_letters + 1, WINDOW_WIDTH);
-                self.cursor_position = add1::<WINDOW_WIDTH>(self.cursor_position);
+                self.cursor_position = 0;
+                self.num_letters = 0;
+                self.next_letter = 0;
+                self.window_status = WindowStatus::ExecutingFile;
+                self.program_running = true;
+                self.array_string = input_string;
+            } else {
+                self.start_new_line(0);
             }
+        } else if is_drawable(key) {
+            if self.num_letters == 0 {
+                self.clear_line(self.current_row);
+            }
+            if self.cursor_position >= WINDOW_WIDTH - 1 {
+                let current_char: char = key;
+                if self.window_status == WindowStatus::AwaitingInput {
+                    self.start_new_line(1);
+                } else {
+                    self.start_new_line(0);
+                }
+                self.letters[self.current_row][self.next_letter] = current_char;
+            } else {
+                self.letters[self.current_row][self.next_letter] = key;
+            }
+            self.next_letter = add1::<WINDOW_WIDTH>(self.next_letter);
+            self.num_letters = min(self.num_letters + 1, WINDOW_WIDTH);
+            self.cursor_position = add1::<WINDOW_WIDTH>(self.cursor_position);
         }
     }
 }
